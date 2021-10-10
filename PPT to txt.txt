@@ -1,0 +1,157 @@
+Sub ExportText()
+  Dim oPres As Presentation
+  Dim oSlides As Slides
+  Dim oSld As Slide         'Slide Object
+  Dim oShp As Shape         'Shape Object
+  Dim iFile As Integer      'File handle for output
+  iFile = FreeFile          'Get a free file number
+  Dim PathSep As String
+  Dim FileNum As Integer
+  Dim sTempString As String
+  Dim fd() As String
+
+  #If Mac Then
+    PathSep = "/"
+  #Else
+    PathSep = "\"
+  #End If
+
+  fd = Split(FileDialogOpen, vbLf)
+  If Left(fd(0), 1) = "-" Then
+    Debug.Print "Canceled"
+    Exit Sub
+  End If
+
+  For n = LBound(fd) To UBound(fd)
+    Set oPres = Presentations.Open(FileName:=fd(n), ReadOnly:=msoTrue, WithWindow:=msoTrue)
+    Set oSlides = oPres.Slides
+
+    FileNum = FreeFile
+
+    'Open output file
+    ' NOTE:  errors here if file hasn't been saved
+    Open oPres.Path & PathSep & oPres.Name & ".txt" For Output As FileNum
+    
+    num_slides = oPres.Slides.Count
+
+    For i = 1 To num_slides
+      Set oSld = oPres.Slides(i)
+      Print #iFile, "Slide:" & vbTab & CStr(oSld.SlideNumber)
+      For Each oShp In oSld.Shapes
+        'Check to see if shape has a text frame and text
+        If oShp.HasTextFrame And oShp.TextFrame.HasText Then
+          If oShp.Type = msoPlaceholder Then
+            Select Case oShp.PlaceholderFormat.Type
+              Case Is = ppPlaceholderTitle, ppPlaceholderCenterTitle
+                Print #iFile, "标题：" & vbTab & oShp.TextFrame.TextRange
+              Case Is = ppPlaceholderBody
+                Print #iFile, "正文：" & vbTab & oShp.TextFrame.TextRange
+              Case Is = ppPlaceholderSubtitle
+                Print #iFile, "副标题：" & vbTab & oShp.TextFrame.TextRange
+              Case Else
+                Print #iFile, "其他占位符：" & vbTab & oShp.TextFrame.TextRange
+            End Select
+          Else
+            Print #iFile, vbTab & oShp.TextFrame.TextRange
+          End If  ' msoPlaceholder
+        Else  ' it doesn't have a textframe - it might be a group that contains text so:
+          If oShp.Type = msoGroup Then
+            sTempString = TextFromGroupShape(oShp)
+            If Len(sTempString) > 0 Then
+              Print #iFile, sTempString
+            End If
+          End If
+        End If    ' Has text frame/Has text
+      Next oShp
+      
+      Print #iFile, vbCrLf
+    Next i
+    Close #iFile
+    oPres.Close
+  Next n
+
+  MsgBox "已处理 " & UBound(fd) - LBound(fd) + 1 & " 个文件"
+End Sub
+
+Function TextFromGroupShape(oSh As Shape) As String
+' Returns the text from the shapes in a group
+' and recursively, text within shapes within groups within groups etc.
+
+  Dim oGpSh As Shape
+  Dim sTempText As String
+
+  If oSh.Type = msoGroup Then
+    For Each oGpSh In oSh.GroupItems
+      With oGpSh
+        If .Type = msoGroup Then
+          sTempText = sTempText & TextFromGroupShape(oGpSh)
+        Else
+          If .HasTextFrame Then
+            If .TextFrame.HasText Then
+              sTempText = sTempText & "(Gp:) " & .TextFrame.TextRange.Text & vbCrLf
+            End If
+          End If
+        End If
+      End With
+    Next
+  End If
+
+  TextFromGroupShape = sTempText
+
+NormalExit:
+  Exit Function
+
+Errorhandler:
+  Resume Next
+
+End Function
+
+Function FileDialogOpen() As String
+
+  #If Mac Then
+    ' 默认路径
+    mypath = MacScript("return (path to desktop folder) as String")
+
+    sMacScript = "set applescript's text item delimiters to "","" " & vbNewLine & _
+    "try " & vbNewLine & _
+    "set theFiles to (choose file of type {""ppt"", ""pptx""}" & _
+    "with prompt ""请选择要处理的一个或多个 PowerPoint 文档"" default location alias """ & _
+    mypath & """ multiple selections allowed true)" & vbNewLine & _
+    "set applescript's text item delimiters to """" " & vbNewLine & _
+    "on error errStr number errorNumber" & vbNewLine & _
+    "return errorNumber " & vbNewLine & _
+    "end try " & vbNewLine & _
+    "repeat with i from 1 to length of theFiles" & vbNewLine & _
+    "if i = 1 then" & vbNewLine & _
+    "set fpath to POSIX path of item i of theFiles" & vbNewLine & _
+    "else" & vbNewLine & _
+    "set fpath to fpath & """ & vbNewLine & _
+    """ & POSIX path of item i of theFiles" & vbNewLine & _
+    "end if" & vbNewLine & _
+    "end repeat" & vbNewLine & _
+    "return fpath"
+
+    FileDialogOpen = MacScript(sMacScript)
+
+  #Else
+    With Application.FileDialog(msoFileDialogOpen)
+      .AllowMultiSelect = True
+      .Title = "请选择要处理的一个或多个 PowerPoint 文档"
+      .Filters.Add "PowerPoint 文档", "*.ppt; *.pptx", 1
+      If .Show = -1 Then
+        FileDialogOpen = ""
+        For i = 1 To .SelectedItems.Count
+          If i = 1 Then
+            FileDialogOpen = .SelectedItems.Item(i)
+          Else
+            FileDialogOpen = FileDialogOpen & vbLf & .SelectedItems.Item(i)
+          End If
+        Next
+      Else
+        FileDialogOpen = "-"
+      End If
+    End With
+
+  #End If
+End Function
+
